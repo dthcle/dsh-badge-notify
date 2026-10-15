@@ -2,6 +2,16 @@
 
 ## [0.6.0]
 
+### Fixed
+- **权限申请的小黄点不出现**：批准/拒绝可能在几毫秒内就被答复（自动批准器，或 fail-closed 的策略），
+  而浮层按 500ms 轮询 `state.json`——只存在几毫秒的标记根本来不及被画出一帧。
+  实测宿主日志里确实有 `approval/request: … pending=1`，屏幕上却什么都没有。
+  现在每个提示标记**至少显示 `attention.minVisibleMs`（默认 1500ms）**：请求提前结束不会立刻抹掉标记，
+  而是保留到最短可见时间结束；释放复用已有的 1.5s 看门狗节拍，不新增定时器。
+  同时把「标记存在了多久」写进 host.log，便于以后核对。
+- 重命名：包名 `dsh-task-badge` → `dsh-badge-notify`（数据目录 `DshBadgeNotify`、
+  载荷 `BadgeNotify.ps1`、路由 `/api/dsh-badge-notify/*`、互斥体与日志文件一并改名）。
+
 ### Changed
 - **徽标改为统计「未读」的完成数，与 DSH 侧边栏的小绿点同义**（用户实际想要的行为）：
   - 会话跑完时你**正在看它** → 不算数（DSH 此时也不点绿点）

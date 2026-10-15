@@ -60,6 +60,7 @@ DSH 任务栏徽标：在 **Windows 任务栏的 DSH 图标周围**（贴着图�
 | `anchor.offsetX/Y` | `0` | 浮层整体位移 |
 | `anchor.iconOffsetX/Y` | `0` | 图标框位移（微调到“正贴在图标上”） |
 | `badge.unreadOnly` | `true` | `true`＝只统计**未读**的完成（与绿点同义）；`false`＝所有完成都计数 |
+| `attention.minVisibleMs` | `1500` | 提示标记的最短可见时间：请求若在几毫秒内就被答复，标记仍会保留这么久，否则浮层根本来不及画 |
 | `badge.sizeRatio` | `0.73` | 徽标边长 ÷ 图标边长（`badge.size>0` 时改用绝对像素） |
 | `badge.lift` | `0.5` | 徽标中心相对图标右上角抬高多少（×徽标边长）：`0.5`＝徽标底边贴着图标顶边，`0`＝中心落在角上 |
 | `badge.insetX/Y` | `0` / `3` | 徽标中心再往左/往下微调多少像素 |
