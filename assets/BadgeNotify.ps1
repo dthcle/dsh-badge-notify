@@ -285,6 +285,9 @@ public static class BadgeNative {
   // top. Used to prove/report an occlusion instead of guessing at it.
   [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 
   public static string TopNeighbour(BadgeForm form) {
     if (form == null || !form.IsHandleCreated) { return ""; }
@@ -293,6 +296,33 @@ public static class BadgeNative {
     System.Text.StringBuilder sb = new System.Text.StringBuilder(256);
     GetClassName(prev, sb, 256);
     return sb.ToString();
+  }
+
+  // The class of the nearest VISIBLE window above us that actually overlaps our
+  // rect, or "" when nothing covers us. Z-order alone is not enough: the desktop
+  // permanently keeps invisible/tiny topmost windows (e.g. "IME") above us, and
+  // reporting those made the diagnostic fire constantly and mean nothing.
+  public static string CoveringWindow(BadgeForm form) {
+    if (form == null || !form.IsHandleCreated) { return ""; }
+    RECT me;
+    if (!GetWindowRect(form.Handle, out me)) { return ""; }
+    IntPtr h = GetWindow(form.Handle, GW_HWNDPREV);
+    int guard = 0;
+    while (h != IntPtr.Zero && guard++ < 16) {
+      if (IsWindowVisible(h)) {
+        RECT r;
+        if (GetWindowRect(h, out r) && r.Right > r.Left && r.Bottom > r.Top) {
+          bool overlaps = !(r.Right <= me.Left || r.Left >= me.Right || r.Bottom <= me.Top || r.Top >= me.Bottom);
+          if (overlaps) {
+            System.Text.StringBuilder sb = new System.Text.StringBuilder(256);
+            GetClassName(h, sb, 256);
+            return sb.ToString();
+          }
+        }
+      }
+      h = GetWindow(h, GW_HWNDPREV);
+    }
+    return "";
   }
 
   public static GraphicsPath RoundedRect(RectangleF r, float radius) {
@@ -860,10 +890,12 @@ function Get-IconBox {
   # Measure with the overlay OFF screen. Otherwise our own badge is part of the
   # "ink" the measurement sees, the accepted component grows every re-measure
   # and both the badge and the dots creep away from the icon.
+  $why = if ($key -eq $script:IconBoxFor) { 'icon-box ttl expired' } else { 'button rect changed' }
   if (-not $script:Hidden) {
-    Hide-Overlay
+    Hide-Overlay -Reason "re-measuring ($why)"
     Start-Sleep -Milliseconds 120
   }
+  Write-Log "re-measuring icon box ($why)"
   $box = $null
   if ($Config.Calibrate) { $box = Measure-IconBox -Rect $Rect -Config $Config }
   if ($null -eq $box) { $box = Get-FallbackIconBox -Rect $Rect -Config $Config }
@@ -890,12 +922,16 @@ function Get-CornerRect {
 
 # ---- rendering -------------------------------------------------------------
 function Hide-Overlay {
+  param([string]$Reason = 'unspecified')
   if ($script:Hidden) { return }
   $bmp = New-Object System.Drawing.Bitmap(1, 1)
   [BadgeNative]::Present($script:Form, $bmp, -4, -4)
   $bmp.Dispose()
   $script:Hidden = $true
   $script:LastPresent = $null
+  # Why the marks vanished matters: "button not found" vs "nothing to draw" vs a
+  # blink for a re-measure are three very different bugs.
+  Write-Log "overlay hidden ($Reason)"
 }
 
 function Show-Frame {
@@ -991,16 +1027,23 @@ function RePresent-Frame {
 # just hidden, and nothing in the state changes -- so without this the dot looked
 # like it "briefly disappeared" until some unrelated repaint fixed the z-order.
 function Maintain-ZOrder {
-  $above = [BadgeNative]::TopNeighbour($script:Form)
-  [BadgeNative]::KeepTopMost($script:Form)
+  # Only an actually-overlapping window counts as "covering us".
+  $above = [BadgeNative]::CoveringWindow($script:Form)
   if ($above -ne '') {
+    [BadgeNative]::KeepTopMost($script:Form)
+    RePresent-Frame
     $now = [Environment]::TickCount
     if (($now - $script:LastOccludedLogAt) -gt 5000) {
       $script:LastOccludedLogAt = $now
-      Write-Log "z-order: '$above' was above the overlay - re-asserted topmost"
+      Write-Log "z-order: '$above' covered the overlay - re-asserted topmost"
     }
-    # Something was covering us, so make sure our pixels are current too.
-    RePresent-Frame
+    return
+  }
+  # Nothing covering us: keep our place cheaply, but do not repaint.
+  $now = [Environment]::TickCount
+  if (($now - $script:LastTopMostAt) -gt 1500) {
+    $script:LastTopMostAt = $now
+    [BadgeNative]::KeepTopMost($script:Form)
   }
 }
 
@@ -1116,7 +1159,7 @@ function Invoke-Step {
           Write-Log 'DSH taskbar button not found - overlay hidden'
           $script:LastRectLog = 'none'
         }
-        Hide-Overlay
+        Hide-Overlay -Reason 'button not found'
         return
       }
       $rectKey = '{0},{1},{2}x{3}' -f $buttonRect.X, $buttonRect.Y, $buttonRect.Width, $buttonRect.Height
@@ -1206,7 +1249,7 @@ function Invoke-Step {
       }
     }
 
-    if (($count -le 0) -and ($kinds.Count -eq 0) -and $cfg.Style.HideWhenZero) { Hide-Overlay; return }
+    if (($count -le 0) -and ($kinds.Count -eq 0) -and $cfg.Style.HideWhenZero) { Hide-Overlay -Reason 'nothing to draw'; return }
     Show-Frame -Config $cfg -Icon $drawRect -Count $count -Kinds $kinds
     # Every tick, not every so often: the taskbar taking the foreground (a click
     # on its button) is enough to cover the overlay, and no state changes when
