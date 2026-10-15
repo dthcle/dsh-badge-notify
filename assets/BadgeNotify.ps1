@@ -62,7 +62,10 @@ $script:StateReadAt = -100000
 $script:StateMaxAgeMs = 2500
 $script:CfgStamp = 0
 $script:CfgCheckedAt = 0
-$script:LastTopMostAt = -100000
+$script:LastOccludedLogAt = -100000
+$script:FrameBmp = $null
+$script:FrameX = 0
+$script:FrameY = 0
 $script:PreviewCache = $null
 $script:PreviewStamp = -1
 $script:PreviewLogged = $false
@@ -213,6 +216,7 @@ public static class BadgeNative {
   public const byte AC_SRC_ALPHA = 1;
   static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
   const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOACTIVATE = 0x0010;
+  const uint GW_HWNDPREV = 3;
 
   // UpdateLayeredWindow needs PREMULTIPLIED alpha; Bitmap.GetHbitmap does not
   // premultiply, so build the DIB ourselves (tiny bitmaps, negligible cost).
@@ -269,10 +273,26 @@ public static class BadgeNative {
 
   public static void KeepTopMost(BadgeForm form) {
     // The taskbar is topmost too, and among topmost windows the last one to be
-    // activated wins: without a periodic nudge the overlay can end up BEHIND the
-    // taskbar and the marks silently vanish until the next repaint.
+    // activated wins. Clicking the taskbar button therefore puts the taskbar
+    // above us: the marks are still painted, just covered, so nothing in the
+    // state changes and no repaint is triggered -- the dot simply "disappears"
+    // until something re-asserts the z-order. Hence: every tick.
     if (form == null || !form.IsHandleCreated) { return; }
     SetWindowPos(form.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  }
+
+  // Class name of the window directly ABOVE us in z-order, "" when we are on
+  // top. Used to prove/report an occlusion instead of guessing at it.
+  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+
+  public static string TopNeighbour(BadgeForm form) {
+    if (form == null || !form.IsHandleCreated) { return ""; }
+    IntPtr prev = GetWindow(form.Handle, GW_HWNDPREV);
+    if (prev == IntPtr.Zero) { return ""; }
+    System.Text.StringBuilder sb = new System.Text.StringBuilder(256);
+    GetClassName(prev, sb, 256);
+    return sb.ToString();
   }
 
   public static GraphicsPath RoundedRect(RectangleF r, float radius) {
@@ -946,14 +966,42 @@ function Show-Frame {
   $key = '{0},{1},{2},{3},{4},{5},{6},{7},{8}' -f $cx, $cy, $cw, $ch, $Count, ($Kinds -join ''), $padTop, $padBottom, $padSide
   if ($key -eq $script:LastPresent) { return }
   $bmp = [BadgeRender]::Render($inkW, $inkH, $padSide, $padTop, $padSide, $padBottom, $Count, $Kinds, $style)
-  try {
-    [BadgeNative]::Present($script:Form, $bmp, $cx, $cy)
-  } finally {
-    $bmp.Dispose()
-  }
+  [BadgeNative]::Present($script:Form, $bmp, $cx, $cy)
+  # Keep the pixels: a z-order restore can then re-present the exact frame
+  # without paying for the render (which re-measures the digit's ink).
+  if ($null -ne $script:FrameBmp) { $script:FrameBmp.Dispose() }
+  $script:FrameBmp = $bmp
+  $script:FrameX = $cx
+  $script:FrameY = $cy
   $script:LastPresent = $key
   $script:Hidden = $false
   Write-Log ("frame count=$Count dots=$($Kinds.Count) canvas=${cw}x${ch}@$cx,$cy pad=$padSide/$padTop/$padBottom badge=$($style.BadgeSize) dot=$($style.DotSize) icon=${inkW}x${inkH}")
+}
+
+# Put the already-rendered frame back on screen. Cheap (no re-render) and safe
+# to call every tick: UpdateLayeredWindow replaces the window content atomically.
+function RePresent-Frame {
+  if ($script:Hidden -or $null -eq $script:FrameBmp) { return }
+  [BadgeNative]::Present($script:Form, $script:FrameBmp, $script:FrameX, $script:FrameY)
+}
+
+# Re-assert our place at the top of the topmost band, and report what was
+# covering us. Clicking the DSH taskbar button makes the taskbar the foreground
+# topmost window, which puts it above the overlay: the marks are still there,
+# just hidden, and nothing in the state changes -- so without this the dot looked
+# like it "briefly disappeared" until some unrelated repaint fixed the z-order.
+function Maintain-ZOrder {
+  $above = [BadgeNative]::TopNeighbour($script:Form)
+  [BadgeNative]::KeepTopMost($script:Form)
+  if ($above -ne '') {
+    $now = [Environment]::TickCount
+    if (($now - $script:LastOccludedLogAt) -gt 5000) {
+      $script:LastOccludedLogAt = $now
+      Write-Log "z-order: '$above' was above the overlay - re-asserted topmost"
+    }
+    # Something was covering us, so make sure our pixels are current too.
+    RePresent-Frame
+  }
 }
 
 # ---- preview (manual tuning) ------------------------------------------------
@@ -1160,12 +1208,11 @@ function Invoke-Step {
 
     if (($count -le 0) -and ($kinds.Count -eq 0) -and $cfg.Style.HideWhenZero) { Hide-Overlay; return }
     Show-Frame -Config $cfg -Icon $drawRect -Count $count -Kinds $kinds
-    # The taskbar is topmost as well: re-assert our z-order now and then, or the
-    # marks can end up behind it until the next repaint.
-    if (($now - $script:LastTopMostAt) -gt 1500) {
-      $script:LastTopMostAt = $now
-      [BadgeNative]::KeepTopMost($script:Form)
-    }
+    # Every tick, not every so often: the taskbar taking the foreground (a click
+    # on its button) is enough to cover the overlay, and no state changes when
+    # that happens, so there is no repaint to rescue it. This is what makes the
+    # dot flicker away for as long as the nudge used to be throttled.
+    Maintain-ZOrder
   } catch {
     Write-Log "step failed: $($_.Exception.Message)"
   } finally {
