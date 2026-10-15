@@ -1,0 +1,22 @@
+# Local runtime state must never be committed.
+node_modules/
+dist/
+*.log
+logs/
+config.json.bak
+state.json
+state.json.tmp*
+stopped.flag
+clear.req
+preview.json
+iconbox.json
+
+# OS / editor noise
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+
+# Screenshots produced while testing the overlay
+docs/*.png

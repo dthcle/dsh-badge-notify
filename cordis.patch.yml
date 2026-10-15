@@ -1,0 +1,8 @@
+# dsh-badge-notify bundle patch: inserts the host row into the profile roster.
+# The row is a bare plugin by package name: the node half (exports ".") runs in
+# the host process, subscribes to the completion / attention events, writes
+# state.json and registers the /api/dsh-badge-notify/* loopback routes. The
+# browser half (exports "./client") adds the Settings -> Plugins tab.
+- insert:
+    - id: badge-notify
+      name: 'dsh-badge-notify'

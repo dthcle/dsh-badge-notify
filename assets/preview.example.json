@@ -1,0 +1,6 @@
+{
+  "_comment": "manual tuning preview: the overlay paints exactly these marks instead of the live state. Delete this file to go back to real events.",
+  "enabled": true,
+  "count": 8,
+  "dots": ["question", "approval"]
+}
