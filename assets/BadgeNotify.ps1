@@ -1323,8 +1323,19 @@ function Invoke-BadgeMain {
   $timer.add_Tick({ Invoke-Step })
   $timer.Start()
 
+  # Dedicated z-order guard, independent of the 500ms state poll. Clicking the
+  # taskbar button hands the topmost slot to Shell_TrayWnd with no state change,
+  # so the marks get covered and nothing repaints them; checking a few times a
+  # second makes that recovery imperceptible. Two Win32 calls per tick.
+  $guard = New-Object System.Windows.Forms.Timer
+  $guard.Interval = 120
+  $guard.add_Tick({ try { Maintain-ZOrder } catch { } })
+  $guard.Start()
+
   Invoke-Step
   [System.Windows.Forms.Application]::Run($script:Form)
+  $guard.Stop()
+  $guard.Dispose()
   $timer.Stop()
   $timer.Dispose()
   return 0
