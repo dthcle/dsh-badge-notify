@@ -34,7 +34,7 @@ param(
   [switch]$Demo
 )
 
-$script:Version = '0.6.0'
+$script:Version = '0.6.1'
 $ErrorActionPreference = 'Stop'
 
 if ($PSScriptRoot) { $script:Dir = $PSScriptRoot } else { $script:Dir = (Get-Location).Path }
@@ -63,6 +63,8 @@ $script:StateMaxAgeMs = 2500
 $script:CfgStamp = 0
 $script:CfgCheckedAt = 0
 $script:LastOccludedLogAt = -100000
+$script:LastLostTopMostAt = -100000
+$script:LastWalkAt = -100000
 $script:FrameBmp = $null
 $script:FrameX = 0
 $script:FrameY = 0
@@ -189,6 +191,8 @@ public static class BadgeNative {
   [DllImport("user32.dll", SetLastError = true)] public static extern bool SetProcessDpiAwarenessContext(IntPtr ctx);
   [DllImport("user32.dll", SetLastError = true)]
   public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint flags);
+  [DllImport("user32.dll", SetLastError = true)] public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+  [DllImport("user32.dll", SetLastError = true)] public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
   [DllImport("gdi32.dll")] public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
   [DllImport("gdi32.dll")] public static extern bool DeleteDC(IntPtr hdc);
   [DllImport("gdi32.dll")] public static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
@@ -215,8 +219,10 @@ public static class BadgeNative {
   public const int ULW_ALPHA = 2;  public const byte AC_SRC_OVER = 0;
   public const byte AC_SRC_ALPHA = 1;
   static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
-  const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOACTIVATE = 0x0010;
+  const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOACTIVATE = 0x0010, SWP_FRAMECHANGED = 0x0020;
   const uint GW_HWNDPREV = 3;
+  const int GWL_EXSTYLE = -20;
+  const int WS_EX_TOPMOST = 0x00000008;
 
   // UpdateLayeredWindow needs PREMULTIPLIED alpha; Bitmap.GetHbitmap does not
   // premultiply, so build the DIB ourselves (tiny bitmaps, negligible cost).
@@ -281,6 +287,28 @@ public static class BadgeNative {
     SetWindowPos(form.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
   }
 
+  // True while the window still carries WS_EX_TOPMOST. SetWindowPos can fail
+  // (the window is being re-created, a full-screen topmost window owns the band,
+  // the shell is busy) and then the marks stay painted but permanently covered:
+  // nothing in the state changes, so the old code never noticed and the dot was
+  // simply gone until the next real event forced a repaint. Verified every tick.
+  public static bool IsTopMost(BadgeForm form) {
+    if (form == null || !form.IsHandleCreated) { return false; }
+    return (GetWindowLong(form.Handle, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+  }
+
+  // Last resort when SetWindowPos(HWND_TOPMOST) is refused: write the extended
+  // style bit directly and let SetWindowPos(HWND_TOP) re-sort the band. Some
+  // shells only honour the explicit bit.
+  public static bool ForceTopMost(BadgeForm form) {
+    if (form == null || !form.IsHandleCreated) { return false; }
+    SetWindowPos(form.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    if (IsTopMost(form)) { return true; }
+    SetWindowLong(form.Handle, GWL_EXSTYLE, GetWindowLong(form.Handle, GWL_EXSTYLE) | WS_EX_TOPMOST);
+    SetWindowPos(form.Handle, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    return IsTopMost(form);
+  }
+
   // Class name of the window directly ABOVE us in z-order, "" when we are on
   // top. Used to prove/report an occlusion instead of guessing at it.
   [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
@@ -302,13 +330,21 @@ public static class BadgeNative {
   // rect, or "" when nothing covers us. Z-order alone is not enough: the desktop
   // permanently keeps invisible/tiny topmost windows (e.g. "IME") above us, and
   // reporting those made the diagnostic fire constantly and mean nothing.
+  //
+  // The walk must be long: the taskbar is the window we actually care about and
+  // it is NOT a near neighbour. Measured on this machine the overlay sat at
+  // z-rank ~828 with Shell_TrayWnd at ~38 -- roughly 790 windows above it. The
+  // old limit of 16 stopped far short of the taskbar, so the guard concluded
+  // "nothing covering us" in exactly the case it was written for, and a lost
+  // WS_EX_TOPMOST was never recovered (the marks stayed painted but hidden).
+  // Walking is cheap: GetWindowRect is only called for visible windows.
   public static string CoveringWindow(BadgeForm form) {
     if (form == null || !form.IsHandleCreated) { return ""; }
     RECT me;
     if (!GetWindowRect(form.Handle, out me)) { return ""; }
     IntPtr h = GetWindow(form.Handle, GW_HWNDPREV);
     int guard = 0;
-    while (h != IntPtr.Zero && guard++ < 16) {
+    while (h != IntPtr.Zero && guard++ < 1024) {
       if (IsWindowVisible(h)) {
         RECT r;
         if (GetWindowRect(h, out r) && r.Right > r.Left && r.Bottom > r.Top) {
@@ -1027,23 +1063,37 @@ function RePresent-Frame {
 # just hidden, and nothing in the state changes -- so without this the dot looked
 # like it "briefly disappeared" until some unrelated repaint fixed the z-order.
 function Maintain-ZOrder {
-  # Only an actually-overlapping window counts as "covering us".
-  $above = [BadgeNative]::CoveringWindow($script:Form)
-  if ($above -ne '') {
-    [BadgeNative]::KeepTopMost($script:Form)
+  $now = [Environment]::TickCount
+  # A lost WS_EX_TOPMOST is the failure that matters: the marks stay painted but
+  # the taskbar covers them, and nothing in the state changes, so no repaint ever
+  # rescues them. Check the bit itself instead of trusting SetWindowPos's silence.
+  if (-not [BadgeNative]::IsTopMost($script:Form)) {
+    $recovered = [BadgeNative]::ForceTopMost($script:Form)
     RePresent-Frame
-    $now = [Environment]::TickCount
-    if (($now - $script:LastOccludedLogAt) -gt 5000) {
-      $script:LastOccludedLogAt = $now
-      Write-Log "z-order: '$above' covered the overlay - re-asserted topmost"
+    if (($now - $script:LastLostTopMostAt) -gt 5000) {
+      $script:LastLostTopMostAt = $now
+      if ($recovered) { Write-Log 'z-order: lost WS_EX_TOPMOST - restored' }
+      else { Write-Log 'z-order: lost WS_EX_TOPMOST - restore FAILED (another topmost window owns the band)' }
     }
     return
   }
-  # Nothing covering us: keep our place cheaply, but do not repaint.
-  $now = [Environment]::TickCount
-  if (($now - $script:LastTopMostAt) -gt 1500) {
-    $script:LastTopMostAt = $now
-    [BadgeNative]::KeepTopMost($script:Form)
+  # Still topmost: re-assert our place at the top of the topmost band. This is
+  # what actually lifts the marks back over the taskbar after it was activated
+  # (the taskbar is topmost too, and activation reorders the band without
+  # clearing anyone's bit). No move/size/activate and no repaint, so it is
+  # invisible -- the expensive part would be UpdateLayeredWindow, and the pixels
+  # have not changed.
+  [BadgeNative]::KeepTopMost($script:Form)
+  # Diagnostics only, and throttled. The taskbar sits hundreds of windows above
+  # us in z-order (measured: overlay ~828, Shell_TrayWnd ~38), so finding it
+  # means walking far; doing that on every 120ms tick would burn CPU for a log
+  # line. Nothing here affects visibility -- the re-assert above already ran.
+  if (($now - $script:LastWalkAt) -lt 5000) { return }
+  $script:LastWalkAt = $now
+  $above = [BadgeNative]::CoveringWindow($script:Form)
+  if ($above -ne '' -and ($now - $script:LastOccludedLogAt) -gt 5000) {
+    $script:LastOccludedLogAt = $now
+    Write-Log "z-order: '$above' covered the overlay - re-asserted topmost"
   }
 }
 
