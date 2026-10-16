@@ -3,23 +3,30 @@
 ## [0.6.1]
 
 ### Fixed
-- **有标记（黄点/黑点/角标）却看不见：浮层丢了 `WS_EX_TOPMOST` 后再也没恢复**。
-  这是上一条「点会短暂消失」修复没盖住的真正根因：任务栏被激活时会把 topmost 带里的顺序
-  抢到浮层前面，而在某些情况下浮层**连 `WS_EX_TOPMOST` 位都掉了**（实测 exstyle
-  `0x080900A8` → `0x080900A0`）。此时标记**照画不误**、`state.json` 也没变化，
+- **有标记（黄点/黑点/角标）却看不见：窗口丢了 `WS_EX_TOPMOST`**。
+  这是上一条「点会短暂消失」修复没盖住的根因。标记**照画不误**、`state.json` 也没变化，
   所以不会触发任何重画——屏幕上就是什么都没有，直到下一个真实事件碰巧重画。
-  更糟的是原来的遮挡判定根本发现不了：它沿 z 序只往上找 **16** 个窗口，而实测浮层在
-  z 序第 ~828 位、`Shell_TrayWnd` 在第 ~38 位（中间隔着约 790 个窗口），
-  于是它恰好在这个最该报警的场景里得出「没东西盖着我们」。现在：
-  - 每轮守卫直接**读 `WS_EX_TOPMOST` 位本身**（两次廉价 Win32 调用），不再相信
-    `SetWindowPos` 的静默成功
-  - 位掉了就走 `ForceTopMost()` 恢复：先 `SetWindowPos(HWND_TOPMOST)`，
-    被拒则直接写扩展样式位 + `SWP_FRAMECHANGED` 重排，并重新呈现缓存帧
-  - 遮挡扫描上限 16 → **1024**，能真正走到任务栏；该扫描**仅用于日志**且节流到 5s，
-    置顶本身每 120ms 无条件执行（不重画，像素没变）
-  - 新增日志：`z-order: lost WS_EX_TOPMOST - restored` /
-    `restore FAILED (another topmost window owns the band)`
-  - 实测：修复前浮层矩形内**可见黄点像素 = 0**；修复后同一位置 = **152**（14x14 圆点）
+  实测到的关键证据：
+  - 浮层窗口的 exstyle 是 `0x080900A0`，**恰好等于 `CreateParams` 里那组样式去掉
+    `WS_EX_TOPMOST`**——即句柄是按 `CreateParams` 重建出来的，而原来的 `CreateParams`
+    只补了 LAYERED / NOACTIVATE / TOOLWINDOW / TRANSPARENT，**从没声明过 TOPMOST**，
+    于是重建后的句柄天生不是 topmost
+  - 位丢了之后，**在进程内**实测 `SetWindowPos(HWND_TOPMOST)` 返回 `True`、`GetLastError=0`，
+    但 exstyle 依旧是 `0x080900A0`（TOP 位没置上）——所以「看返回值」永远发现不了这个 bug
+  修复：
+  - `CreateParams` 里**声明 `WS_EX_TOPMOST`**，任何（重）建的句柄一出生就是 topmost
+  - 每轮守卫（120ms）**直接读 `WS_EX_TOPMOST` 位本身**，不再相信 `SetWindowPos` 的静默成功
+  - 位丢了走 `ForceTopMost()` 逐级恢复并**逐步回读验证**：
+    `SetWindowPos(HWND_TOPMOST)` → 直接写扩展样式位 + `SWP_FRAMECHANGED`
+    → 销毁并重建句柄（`RecreateHandle`，让 `CreateParams` 重新生效）
+  - 重建会丢掉像素，所以恢复后立刻重新呈现缓存帧（无标记时把窗口挪回屏外）
+  - 遮挡扫描上限 16 → **1024**：实测浮层在 z 序第 ~828 位、`Shell_TrayWnd` 在第 ~38 位
+    （中间约 790 个窗口），原来的 16 步**恰好在这个最该报警的场景里**得出「没东西盖着我们」
+  - 新增日志：`z-order: lost WS_EX_TOPMOST - restored`，失败时带完整 Win32 诊断
+    （hwnd / visible / exstyle / 每次调用的返回值与 GetLastError）
+  - 实测（同一位置、固定一个黄点）：修复**前**可见黄点像素 = **0**；
+    修复**后** = **152**（14x14 圆点），并连续 150s / 74 次采样保持 `TOPMOST=True`、
+    黄点始终可见（`min yellow pixels = 152`）
 
 ## [0.6.0]
 

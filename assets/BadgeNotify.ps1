@@ -169,9 +169,19 @@ public class BadgeForm : System.Windows.Forms.Form {
     Size = new Size(1, 1);
     SetStyle(ControlStyles.Opaque, true);
   }
+  // WS_EX_TOPMOST must be part of CreateParams. WinForms re-creates the window
+  // handle for all sorts of reasons (style changes, DPI change, a Show after a
+  // Hide), and each recreation starts from this set. Without the bit here a
+  // re-created handle silently comes back NON-topmost - observed exstyle
+  // 0x080900A0, i.e. exactly this set minus WS_EX_TOPMOST - and once it is gone
+  // the OS on this machine refuses to grant it back via SetWindowPos (which
+  // returns TRUE with no error while the bit stays clear), so the marks were
+  // painted but permanently covered by the topmost taskbar. Declaring it here
+  // means every future handle is born topmost again.
   protected override CreateParams CreateParams {
     get {
       CreateParams cp = base.CreateParams;
+      cp.ExStyle |= 0x00000008; // WS_EX_TOPMOST
       cp.ExStyle |= 0x00080000; // WS_EX_LAYERED
       cp.ExStyle |= 0x08000000; // WS_EX_NOACTIVATE
       cp.ExStyle |= 0x00000080; // WS_EX_TOOLWINDOW  (keep out of Alt+Tab)
@@ -180,6 +190,12 @@ public class BadgeForm : System.Windows.Forms.Form {
     }
   }
   protected override void OnPaintBackground(PaintEventArgs e) { }
+
+  // Rebuild the window from scratch. Control.RecreateHandle is protected, so it
+  // is exposed here: it destroys and re-creates the HWND, which makes WinForms
+  // run CreateParams again - the only reliable way back to topmost once the bit
+  // has actually been lost on a live handle (see ForceTopMost).
+  public void RecreateRoot() { RecreateHandle(); }
 }
 
 public static class BadgeNative {
@@ -297,16 +313,62 @@ public static class BadgeNative {
     return (GetWindowLong(form.Handle, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
   }
 
-  // Last resort when SetWindowPos(HWND_TOPMOST) is refused: write the extended
-  // style bit directly and let SetWindowPos(HWND_TOP) re-sort the band. Some
-  // shells only honour the explicit bit.
+  // Last resort when SetWindowPos(HWND_TOPMOST) is refused, in escalating order:
+  //   1. SetWindowPos(HWND_TOPMOST)              - normal path
+  //   2. write WS_EX_TOPMOST directly + FRAMECHANGED
+  //   3. destroy & re-create the HWND so CreateParams runs again (it now sets
+  //      WS_EX_TOPMOST), which is the only way back once a live handle has
+  //      actually refused the bit
+  // Every step is verified by reading the bit back, because on this machine
+  // SetWindowPos returns TRUE with GetLastError 0 while leaving the bit clear.
   public static bool ForceTopMost(BadgeForm form) {
     if (form == null || !form.IsHandleCreated) { return false; }
     SetWindowPos(form.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     if (IsTopMost(form)) { return true; }
     SetWindowLong(form.Handle, GWL_EXSTYLE, GetWindowLong(form.Handle, GWL_EXSTYLE) | WS_EX_TOPMOST);
     SetWindowPos(form.Handle, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    if (IsTopMost(form)) { return true; }
+    // Escalate: rebuild the window. Its pixels are gone afterwards, so the
+    // caller re-presents (or re-parks) it. Visibility is left to WinForms -
+    // forcing Show() here could flash an unpainted layered window on screen.
+    try { form.RecreateRoot(); } catch { }
+    try { SetWindowPos(form.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); } catch { }
     return IsTopMost(form);
+  }
+
+  // Move the (already empty) window off screen, without touching any plugin
+  // state. Used after a handle rebuild while nothing is being drawn.
+  public static void Park(BadgeForm form) {
+    if (form == null || !form.IsHandleCreated) { return; }
+    Bitmap bmp = new Bitmap(1, 1);
+    Present(form, bmp, -4, -4);
+    bmp.Dispose();
+  }
+
+  // Why a restore failed, with the raw Win32 results. A silent boolean is not
+  // enough: "handle gone" and "SetWindowPos refused" need different fixes.
+  public static string DiagnoseTopMost(BadgeForm form) {
+    if (form == null) { return "form=null"; }
+    bool created = form.IsHandleCreated;
+    if (!created) { return "handleCreated=False"; }
+    IntPtr h = form.Handle;
+    int ex = GetWindowLong(h, GWL_EXSTYLE);
+    int exErr = Marshal.GetLastWin32Error();
+    bool vis = IsWindowVisible(h);
+    bool r1 = SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    int e1 = Marshal.GetLastWin32Error();
+    int ex2 = GetWindowLong(h, GWL_EXSTYLE);
+    bool topAfter = (ex2 & WS_EX_TOPMOST) != 0;
+    int sl = SetWindowLong(h, GWL_EXSTYLE, ex2 | WS_EX_TOPMOST);
+    int slErr = Marshal.GetLastWin32Error();
+    int ex3 = GetWindowLong(h, GWL_EXSTYLE);
+    bool topAfterSl = (ex3 & WS_EX_TOPMOST) != 0;
+    bool r3 = SetWindowPos(h, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    int e3 = Marshal.GetLastWin32Error();
+    int ex4 = GetWindowLong(h, GWL_EXSTYLE);
+    return string.Format(
+      "hwnd={0} visible={1} exstyle=0x{2:X8}(err{3}) | SetWindowPos(TOPMOST)->{4} err{5} ex=0x{6:X8} top={7} | SetWindowLong->{8} err{9} ex=0x{10:X8} top={11} | SetWindowPos(TOP,FRAME)->{12} err{13} ex=0x{14:X8} top={15}",
+      h, vis, ex, exErr, r1, e1, ex2, topAfter, sl, slErr, ex3, topAfterSl, r3, e3, ex4, (ex4 & WS_EX_TOPMOST) != 0);
   }
 
   // Class name of the window directly ABOVE us in z-order, "" when we are on
@@ -1064,16 +1126,28 @@ function RePresent-Frame {
 # like it "briefly disappeared" until some unrelated repaint fixed the z-order.
 function Maintain-ZOrder {
   $now = [Environment]::TickCount
+  # NOTE: this must run even while the overlay is hidden. Once WS_EX_TOPMOST has
+  # actually dropped, the OS here refuses to give it back (SetWindowPos returns
+  # TRUE with no error, yet the bit is never applied - measured in-process), so
+  # the only reliable strategy is to never let it drop: keep re-asserting. An
+  # earlier "skip while hidden" optimisation made this sticky-fatal, because the
+  # band could be taken during the hidden period and never recovered.
   # A lost WS_EX_TOPMOST is the failure that matters: the marks stay painted but
   # the taskbar covers them, and nothing in the state changes, so no repaint ever
   # rescues them. Check the bit itself instead of trusting SetWindowPos's silence.
   if (-not [BadgeNative]::IsTopMost($script:Form)) {
     $recovered = [BadgeNative]::ForceTopMost($script:Form)
-    RePresent-Frame
+    # ForceTopMost may have rebuilt the window, which discards its contents:
+    # put the marks back (or re-park it when there is nothing to draw).
+    if ($null -ne $script:FrameBmp -and -not $script:Hidden) { RePresent-Frame }
+    else { [BadgeNative]::Park($script:Form); $script:Hidden = $true; $script:LastPresent = $null }
     if (($now - $script:LastLostTopMostAt) -gt 5000) {
       $script:LastLostTopMostAt = $now
-      if ($recovered) { Write-Log 'z-order: lost WS_EX_TOPMOST - restored' }
-      else { Write-Log 'z-order: lost WS_EX_TOPMOST - restore FAILED (another topmost window owns the band)' }
+      if ($recovered) {
+        Write-Log 'z-order: lost WS_EX_TOPMOST - restored'
+      } else {
+        Write-Log ("z-order: lost WS_EX_TOPMOST - restore FAILED | " + [BadgeNative]::DiagnoseTopMost($script:Form))
+      }
     }
     return
   }
