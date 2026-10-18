@@ -23,15 +23,18 @@ DSH 任务栏图标上的实际效果（左边黑点=待回答，左下黄点=�
 ## 安装
 
 ```powershell
+dsh plugin --profile desktop add dsh-badge-notify
+```
+
+也可以直接从 GitHub 源码安装：
+
+```powershell
 dsh plugin --profile desktop add github:dthcle/dsh-badge-notify
 ```
 
 装完**不用重启 DSH**：宿主半端会自动把浮层载荷部署到 `%LOCALAPPDATA%\DshBadgeNotify\`
 并拉起浮层，几秒内就能在任务栏的 DSH 图标上看到徽标。
 在 **设置 → 插件 → 任务徽标** 里可以看状态、启停、清零。
-
-> 目前只提供 GitHub 源码安装（还没有发布到 npm）。如果之后上了 npm，
-> 就会变成 `dsh plugin --profile desktop add dsh-badge-notify`。
 
 卸载：
 
