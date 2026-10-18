@@ -36,6 +36,7 @@
   "files": [
     "lib/**/*.js",
     "assets",
+    "screenshots",
     "cordis.patch.yml",
     "README.md",
     "CHANGELOG.md"

@@ -14,6 +14,43 @@ DSH 任务栏徽标：在 **Windows 任务栏的 DSH 图标周围**（贴着图�
   - 第一个点与徽标**同一水平线**（左上角位置），第二个点落在左边中点；同类的多个待处理仍只有一个点
   - 想回到“每个待处理项一个点”，把 `dots.group` 改成 `"item"`
 
+## 截图
+
+DSH 任务栏图标上的实际效果（左边黑点=待回答，左下黄点=待批准，右上角标=未读完成数）：
+
+![DSH 任务栏图标](screenshots/icon.png)
+
+## 安装
+
+```powershell
+dsh plugin --profile desktop add github:dthcle/dsh-badge-notify
+```
+
+装完**不用重启 DSH**：宿主半端会自动把浮层载荷部署到 `%LOCALAPPDATA%\DshBadgeNotify\`
+并拉起浮层，几秒内就能在任务栏的 DSH 图标上看到徽标。
+在 **设置 → 插件 → 任务徽标** 里可以看状态、启停、清零。
+
+> 目前只提供 GitHub 源码安装（还没有发布到 npm）。如果之后上了 npm，
+> 就会变成 `dsh plugin --profile desktop add dsh-badge-notify`。
+
+卸载：
+
+```powershell
+dsh plugin --profile desktop remove dsh-badge-notify
+```
+
+### 运行要求
+
+- **平台**：Windows 10 / 11（靠 UI Automation 定位任务栏按钮 + 分层窗口叠画，Windows 专有）
+- **DSH**：桌面版（`desktop` profile）。浮层需要一个能显示任务栏的桌面会话
+- **无需管理员权限**：不注入进程、不读跨进程内存，只用 UIA 读取按钮坐标
+- **不联网**：没有外部服务，全部本地运行
+- **资源占用**：约 0.7% 单核 CPU、~145 MB 内存（其中 ~91 MB 是 PowerShell + WinForms 的运行时地板）
+
+> 浮层找的是**桌面版 DSH** 那个任务栏按钮（`Appid: com.deepseek.dsh`），所以装到这个 App
+> 正在用的 profile 里才有效——默认是 `desktop`。如果你启动时用的是别的 profile 名，
+> 把命令里的 `--profile desktop` 换成你的那个即可。
+
 ## 形态
 
 - **Host 半端**（`lib/index.js`，跑在 DSH 进程里）：订阅 `agent/status`（running→idle 记一次
