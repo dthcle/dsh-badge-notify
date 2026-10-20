@@ -34,7 +34,7 @@ dsh plugin --profile desktop add github:dthcle/dsh-badge-notify
 
 装完**不用重启 DSH**：宿主半端会自动把浮层载荷部署到 `%LOCALAPPDATA%\DshBadgeNotify\`
 并拉起浮层，几秒内就能在任务栏的 DSH 图标上看到徽标。
-在 **设置 → 插件 → 任务徽标** 里可以看状态、启停、清零。
+在 **设置 → 任务徽标**（独立设置页，与「内置插件」平级）里可以看状态、启停、清零。
 
 卸载：
 
@@ -147,7 +147,7 @@ dsh plugin --profile desktop remove dsh-badge-notify
 | `/api/dsh-badge-notify/clear` | 已完成计数清零 |
 | `/api/dsh-badge-notify/read` | 客户端半端上报「当前主视图打开的会话集合」`{"sessionIds":[...]}`，这些会话视为已读、不再计数 |
 
-Web GUI：**设置 → 插件 → 任务徽标**（状态点、启停、清零、待处理列表，5s 轮询）。
+Web GUI：**设置 → 任务徽标**（独立设置页：状态点、启停、清零、待处理列表，5s 轮询）。
 
 ### 未读语义从哪来
 

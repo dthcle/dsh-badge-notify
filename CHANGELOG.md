@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.0]
+
+### Changed
+- **设置界面从「内置插件」页里的一条 tab，提升为设置里独立的一页**，与该页平级。
+  原来注册在 `settings.plugins.tab`（设置 → 内置插件 → 任务徽标），现在注册在
+  **`settings.section`**（设置里的一级页面），`order: 16` 紧跟在内置插件（15）之后、
+  智能体预设（20）之前。设置左侧导航里直接就能看到「任务徽标」，不用再点进插件页。
+- 页面按设置页的样式重做，并**改用宿主主题 token**（`--dsw-alias-*`）而不是写死的颜色，
+  因此跟随浅色/深色主题：卡片用 `--dsw-alias-bg-layer-2` + `--dsw-alias-border-l1`，
+  正文/次要文字用 `--dsw-alias-label-primary` / `--dsw-alias-label-secondary`，
+  状态点用 `--dsw-alias-state-success-primary` / `--dsw-alias-state-warn-primary` /
+  `--dsw-alias-state-idle-primary`，开关与按钮用 `--dsw-alias-brand-primary` /
+  `--dsw-alias-border-l2`。字面颜色只保留在滑块与主按钮文字上。
+- 页面顶部增加一行说明文字；「数据目录」这一行的标签原来是复用了页面标题（`title`），
+  现在改为独立的 `dataDir` 文案，中英文都补齐。
+
 ## [0.6.2]
 
 ### Fixed
