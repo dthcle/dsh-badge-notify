@@ -1,7 +1,10 @@
 // Static checks on the client half before release.
 import fs from "node:fs";
 
-const src = fs.readFileSync(new URL("../lib/client.js", import.meta.url), "utf8");
+const src = fs.readFileSync(
+  process.env.BADGE_CLIENT || new URL("../lib/client.js", import.meta.url),
+  "utf8",
+);
 
 const used = [...new Set([...src.matchAll(/\bt\('([A-Za-z0-9_]+)'\)/g)].map((m) => m[1]))].sort();
 
@@ -34,6 +37,20 @@ for (const tk of tokenRefs.sort()) console.log("   ", tk);
 const bad = src.includes("dsh-client-ui-primitives") || /require\('@deepseek-ai\//.test(src);
 console.log("\nimports a Harness Client package:", bad ? "YES (forbidden)" : "no");
 
-const ok = !missingZh.length && !missingEn.length && !bad;
+// Class names used by the component must exist in the stylesheet, and vice
+// versa: renaming a class in the CSS while a stale name stays in the JSX is
+// silent (the element just loses its styling).
+const jsPart = src.replace(css, "");
+const usedClasses = new Set(
+  [...jsPart.matchAll(/'([^']*\bdbn-[a-z0-9- ]*)'/g)].flatMap((m) => m[1].split(/\s+/)),
+);
+const definedClasses = new Set([...css.matchAll(/\.(dbn-[a-z0-9-]+)/g)].map((m) => m[1]));
+const undefinedClasses = [...usedClasses].filter((c) => c && !definedClasses.has(c));
+const unusedClasses = [...definedClasses].filter((c) => !usedClasses.has(c));
+console.log("\nclasses used in JS not in CSS:", undefinedClasses.length ? undefinedClasses.join(", ") : "none");
+console.log("classes defined in CSS, unused:", unusedClasses.length ? unusedClasses.join(", ") : "none");
+
+const ok =
+  !missingZh.length && !missingEn.length && !bad && !undefinedClasses.length;
 console.log(`\n=== ${ok ? "PASS" : "FAIL"} ===`);
 process.exit(ok ? 0 : 1);
