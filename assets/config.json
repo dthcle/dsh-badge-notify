@@ -72,6 +72,10 @@
     "insetX": 0,
     "insetY": 0
   },
+  "display": {
+    "_note": "taskbarOnly=true (default): the marks disappear when something covers the taskbar - a fullscreen game, a video, a maximised window - instead of floating on top of it. Set false to keep them always on top of everything.",
+    "taskbarOnly": true
+  },
   "clickThrough": true,
   "pollMs": 500,
   "buttonRefreshMs": 4000,

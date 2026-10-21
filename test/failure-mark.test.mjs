@@ -18,7 +18,7 @@ const src = fs.readFileSync(
   process.env.BADGE_MODULE || new URL("../lib/index.js", import.meta.url),
   "utf8",
 );
-const EXPORTS = ["markFailed", "markCompleted", "setClientState", "failed", "completed", "snapshotState", "describeFailure"]
+const EXPORTS = ["markFailed", "markCompleted", "setClientState", "failed", "completed", "snapshotState", "describeFailure", "pruneFailed"]
   .filter((n) => new RegExp(`(function|const|let)\\s+${n}\\b`).test(src));
 const modPath = path.join(tmpData, "index.testable.mjs");
 fs.writeFileSync(modPath, src + `\nexport { ${EXPORTS.join(", ")} };\n`, "utf8");
@@ -93,6 +93,28 @@ check("very long text is trimmed to 160 chars", (() => {
   const text = m.snapshotState().failed.items[0].text;
   return text.length <= 160 && text.endsWith("...");
 })());
+
+console.log("\n8) a failure does NOT expire on a timer");
+// The mark must keep reminding you until you deal with it: only opening the
+// session or a later successful turn clears it.
+check("no pruneFailed() exists (no timer-based expiry)",
+  typeof m.pruneFailed !== "function");
+check("the module source declares no failure TTL",
+  !/failedTtlMs/.test(src));
+m.setClientState([], [MAIN, MAIN2, CHILD], "ready");
+m.markFailed(MAIN, "still broken");
+check("a fresh failure is marked", m.snapshotState().failed.count === 1);
+// Simulate the passage of time: the snapshot must still report it.
+const far = Date.now() + 365 * 24 * 3600 * 1000;
+const realNow = Date.now;
+Date.now = () => far;
+try {
+  m.snapshotState();
+  check("still reported after a simulated year", m.snapshotState().failed.count === 1,
+    String(m.snapshotState().failed.count));
+} finally {
+  Date.now = realNow;
+}
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);
 fs.rmSync(tmpData, { recursive: true, force: true });

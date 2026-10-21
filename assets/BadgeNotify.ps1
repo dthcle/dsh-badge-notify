@@ -34,7 +34,7 @@ param(
   [switch]$Demo
 )
 
-$script:Version = '0.8.0'
+$script:Version = '0.8.1'
 $ErrorActionPreference = 'Stop'
 
 if ($PSScriptRoot) { $script:Dir = $PSScriptRoot } else { $script:Dir = (Get-Location).Path }
@@ -383,6 +383,7 @@ public static class BadgeNative {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 
   public static string TopNeighbour(BadgeForm form) {
@@ -427,6 +428,47 @@ public static class BadgeNative {
       h = GetWindow(h, GW_HWNDPREV);
     }
     return "";
+  }
+
+  // Is the taskbar itself still visible to the user?
+  //
+  // "taskbar-only" mode hides the overlay when something covers the taskbar -
+  // a fullscreen game, a video, a maximised window over it - so the marks never
+  // float on top of content they do not belong to. A layered topmost window sits
+  // above EVERYTHING, including fullscreen apps, which is exactly what made the
+  // badge feel out of place.
+  //
+  // Implemented by asking whether any visible window above the TASKBAR overlaps
+  // it, rather than by enumerating fullscreen windows: the shell is the thing we
+  // care about, and this also covers "a normal window covers the taskbar".
+  public static bool IsTaskbarVisible() {
+    IntPtr tray = FindWindow("Shell_TrayWnd", null);
+    if (tray == IntPtr.Zero) { return false; }
+    if (!IsWindowVisible(tray)) { return false; }
+    RECT t;
+    if (!GetWindowRect(tray, out t)) { return false; }
+    // A fullscreen window makes the shell hide/auto-hide the taskbar; treat an
+    // empty or zero-sized rect as "not on screen".
+    if (t.Right <= t.Left || t.Bottom <= t.Top) { return false; }
+    IntPtr h = GetWindow(tray, GW_HWNDPREV);
+    int guard = 0;
+    while (h != IntPtr.Zero && guard++ < 512) {
+      if (IsWindowVisible(h)) {
+        RECT r;
+        if (GetWindowRect(h, out r) && r.Right > r.Left && r.Bottom > r.Top) {
+          bool overlaps = !(r.Right <= t.Left || r.Left >= t.Right || r.Bottom <= t.Top || r.Top >= t.Bottom);
+          if (overlaps) {
+            // Ignore our own overlay: it always overlaps the taskbar.
+            System.Text.StringBuilder sb = new System.Text.StringBuilder(256);
+            GetClassName(h, sb, 256);
+            string cls = sb.ToString();
+            if (!cls.StartsWith("WindowsForms10")) { return false; }
+          }
+        }
+      }
+      h = GetWindow(h, GW_HWNDPREV);
+    }
+    return true;
   }
 
   public static GraphicsPath RoundedRect(RectangleF r, float radius) {
@@ -684,6 +726,9 @@ function Read-Config {
   return [pscustomobject]@{
     Style            = $style
     ClickThrough     = [bool](Get-ConfigValue $raw 'clickThrough' $true)
+    # Default true: the marks belong to the taskbar, so they must disappear when
+    # something covers it (fullscreen game/video) instead of floating on top.
+    TaskbarOnly      = [bool](Get-ConfigValue $raw 'display.taskbarOnly' $true)
     PollMs           = [int](Get-ConfigValue $raw 'pollMs' 500)
     ButtonRefreshMs  = [int](Get-ConfigValue $raw 'buttonRefreshMs' 2500)
     ButtonSearchMs   = [int](Get-ConfigValue $raw 'buttonSearchMs' 30000)
@@ -1430,6 +1475,24 @@ function Invoke-Step {
     }
 
     if (($count -le 0) -and ($kinds.Count -eq 0) -and (-not $errorMark) -and $cfg.Style.HideWhenZero) { Hide-Overlay -Reason 'nothing to draw'; return }
+
+    # "taskbar-only" (the default): the marks belong to the taskbar, so when
+    # something covers it - a fullscreen game, a video, a maximised window - the
+    # overlay goes away instead of floating on top. A topmost layered window sits
+    # above EVERYTHING, which is why the badge used to appear over fullscreen
+    # apps. Setting display.taskbarOnly=false restores the old always-on-top.
+    if ($cfg.TaskbarOnly) {
+      $visible = [BadgeNative]::IsTaskbarVisible()
+      if (-not $visible) {
+        if (($now - $script:LastOccludedLogAt) -gt 5000) {
+          $script:LastOccludedLogAt = $now
+          Write-Log 'taskbar covered - overlay hidden (display.taskbarOnly)'
+        }
+        Hide-Overlay -Reason 'taskbar covered'
+        return
+      }
+    }
+
     Show-Frame -Config $cfg -Icon $drawRect -Count $count -Kinds $kinds -ErrorMark $errorMark
     # Every tick, not every so often: the taskbar taking the foreground (a click
     # on its button) is enough to cover the overlay, and no state changes when
