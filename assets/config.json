@@ -1,5 +1,5 @@
 {
-  "configVersion": 12,
+  "configVersion": 13,
   "_note": "Every size is a ratio of the measured icon (27x20 on this machine, so the basis is 27px). Absolute px knobs are interpreted at anchor.referencePx and scaled by basis/referencePx, so the look survives other DPIs / taskbar scales. Edit, save, and the overlay picks it up in ~2s.",
   "attention": {
     "minVisibleMs": 1500
@@ -59,11 +59,18 @@
     "insetY": 2,
     "question": "#111111",
     "approval": "#ffc400",
+    "error": "#ef4444",
     "ring": "#ffffff",
     "ringWidth": 1.2,
     "order": "kind",
     "group": "kind",
     "max": 2
+  },
+  "error": {
+    "_note": "The red dot for a FAILED turn sits on the icon's top-left corner and never adds to the badge number. size=0 means 'same as dots.size'. insetX/insetY move its centre relative to that corner.",
+    "size": 0,
+    "insetX": 0,
+    "insetY": 0
   },
   "clickThrough": true,
   "pollMs": 500,

@@ -34,7 +34,7 @@ param(
   [switch]$Demo
 )
 
-$script:Version = '0.7.2'
+$script:Version = '0.8.0'
 $ErrorActionPreference = 'Stop'
 
 if ($PSScriptRoot) { $script:Dir = $PSScriptRoot } else { $script:Dir = (Get-Location).Path }
@@ -152,6 +152,12 @@ public class BadgeStyle {
   public bool DotFixedStep = false;
   public Color DotQuestion = Color.FromArgb(17, 17, 17);
   public Color DotApproval = Color.FromArgb(255, 196, 0);
+  // Red mark for a failed turn, drawn at the icon's top-left corner. 0 = derive
+  // it from the attention dot size, so it scales with everything else.
+  public Color DotError = Color.FromArgb(239, 68, 68);
+  public double ErrorDotSize = 0;
+  public int ErrorDotInsetX = 0;
+  public int ErrorDotInsetY = 0;
   public Color DotRing = Color.White;
   public double DotRingWidth = 1.2;
   public int DotMax = 6;
@@ -470,6 +476,15 @@ public static class BadgeRender {
   //                  the rest stacked downwards with a gap
   public static Bitmap Render(int iconW, int iconH, int padLeft, int padTop, int padRight, int padBottom,
                               int count, string[] dotKinds, BadgeStyle s) {
+    return Render(iconW, iconH, padLeft, padTop, padRight, padBottom, count, dotKinds, false, s);
+  }
+
+  // `errorMark` adds a red dot centred on the icon's TOP-LEFT corner. It is kept
+  // out of the attention column on purpose: the column means "something is
+  // waiting for you", while this means "the last run failed" - a different thing
+  // that should read differently at a glance, not as another stacked dot.
+  public static Bitmap Render(int iconW, int iconH, int padLeft, int padTop, int padRight, int padBottom,
+                              int count, string[] dotKinds, bool errorMark, BadgeStyle s) {
     if (iconW < 1) { iconW = 1; }
     if (iconH < 1) { iconH = 1; }
     if (padLeft < 0) { padLeft = 0; }
@@ -521,6 +536,21 @@ public static class BadgeRender {
               using (Pen pen = new Pen(s.DotRing, (float)s.DotRingWidth)) { g.DrawPath(pen, p); }
             }
           }
+        }
+      }
+
+      if (errorMark) {
+        // Centre on the icon's top-left corner, mirroring the badge's placement
+        // on the top-right corner. Sized from the attention dot when unset, so
+        // the whole thing still scales from anchor.referencePx.
+        float eSize = (float)(s.ErrorDotSize > 0 ? s.ErrorDotSize : s.DotSize);
+        float ecx = left + s.ErrorDotInsetX;
+        float ecy = top + s.ErrorDotInsetY;
+        RectangleF eRect = new RectangleF(ecx - (eSize / 2f), ecy - (eSize / 2f), eSize, eSize);
+        using (GraphicsPath p = new GraphicsPath()) {
+          p.AddEllipse(eRect);
+          using (SolidBrush b = new SolidBrush(s.DotError)) { g.FillPath(b, p); }
+          using (Pen pen = new Pen(s.DotRing, (float)s.DotRingWidth)) { g.DrawPath(pen, p); }
         }
       }
 
@@ -640,6 +670,13 @@ function Read-Config {
   $style.DotFixedStep = (([string](Get-ConfigValue $raw 'dots.mode' 'fit')).ToLower() -eq 'fixed')
   $style.DotQuestion    = ConvertTo-Color (Get-ConfigValue $raw 'dots.question' $null) ([System.Drawing.Color]::FromArgb(17, 17, 17))
   $style.DotApproval    = ConvertTo-Color (Get-ConfigValue $raw 'dots.approval' $null) ([System.Drawing.Color]::FromArgb(255, 196, 0))
+  # A failed turn gets a red mark of its own, drawn at the icon's TOP-LEFT
+  # corner (separate from the attention column down the left edge) so it reads
+  # as a different thing: not "waiting for you", but "something broke".
+  $style.DotError       = ConvertTo-Color (Get-ConfigValue $raw 'dots.error' $null) ([System.Drawing.Color]::FromArgb(239, 68, 68))
+  $style.ErrorDotSize   = [double](Get-ConfigValue $raw 'error.size' 0)
+  $style.ErrorDotInsetX = [int](Get-ConfigValue $raw 'error.insetX' 0)
+  $style.ErrorDotInsetY = [int](Get-ConfigValue $raw 'error.insetY' 0)
   $style.DotRing        = ConvertTo-Color (Get-ConfigValue $raw 'dots.ring' $null) ([System.Drawing.Color]::White)
   $style.DotRingWidth   = [double](Get-ConfigValue $raw 'dots.ringWidth' 1.2)
   $style.DotMax         = [int](Get-ConfigValue $raw 'dots.max' 6)
@@ -1033,7 +1070,7 @@ function Hide-Overlay {
 }
 
 function Show-Frame {
-  param($Config, $Icon, [int]$Count, [string[]]$Kinds)
+  param($Config, $Icon, [int]$Count, [string[]]$Kinds, [bool]$ErrorMark = $false)
   # Resolve the style for THIS icon size. Every absolute (px) knob is scaled by
   # basis/referencePx, so a config tuned on one machine keeps its proportions on
   # another (different DPI / taskbar icon size). Ratio knobs need no scaling.
@@ -1054,6 +1091,9 @@ function Show-Frame {
   } else {
     $style.DotSize = & $px $style.DotSize
   }
+  if ($style.ErrorDotSize -gt 0) { $style.ErrorDotSize = & $px $style.ErrorDotSize }
+  $style.ErrorDotInsetX = & $px $style.ErrorDotInsetX
+  $style.ErrorDotInsetY = & $px $style.ErrorDotInsetY
   if ($style.FontSize -gt 0) { $style.FontSize = & $px $style.FontSize }
   $style.DotGap = & $px $style.DotGap
   $style.DotInsetX = & $px $style.DotInsetX
@@ -1075,7 +1115,17 @@ function Show-Frame {
   if ($style.DotStartAtBadge) { $dotStart = $lift }
   $nDots = [Math]::Min($Kinds.Count, $style.DotMax)
   $topReach = [Math]::Max($lift + ($style.BadgeSize / 2.0), $dotStart + $style.DotInsetY + ($style.DotSize / 2.0))
+  # The error mark sits on the icon's top-left corner, so it can reach above and
+  # to the left of the icon just like the badge does on the right.
+  $errorSize = $style.DotSize
+  if ($style.ErrorDotSize -gt 0) { $errorSize = $style.ErrorDotSize }
+  if ($ErrorMark) {
+    $topReach = [Math]::Max($topReach, ($errorSize / 2.0) - $style.ErrorDotInsetY)
+  }
   $sideReach = [Math]::Max($style.BadgeSize, $style.DotSize) / 2.0
+  if ($ErrorMark) {
+    $sideReach = [Math]::Max($sideReach, ($errorSize / 2.0) - $style.ErrorDotInsetX)
+  }
   $dotsBottom = $style.DotSize / 2.0
   if ($nDots -gt 0) {
     $dotsBottom = $dotStart + $style.DotInsetY + ($style.DotSize / 2.0)
@@ -1097,9 +1147,9 @@ function Show-Frame {
   $cw = $inkW + ($padSide * 2); $ch = $inkH + $padTop + $padBottom
   $cx = [int]$Icon.InkX - $padSide + $Config.OffsetX
   $cy = [int]$Icon.InkY - $padTop + $Config.OffsetY
-  $key = '{0},{1},{2},{3},{4},{5},{6},{7},{8}' -f $cx, $cy, $cw, $ch, $Count, ($Kinds -join ''), $padTop, $padBottom, $padSide
+  $key = '{0},{1},{2},{3},{4},{5},{6},{7},{8},{9}' -f $cx, $cy, $cw, $ch, $Count, ($Kinds -join ''), $padTop, $padBottom, $padSide, $ErrorMark
   if ($key -eq $script:LastPresent) { return }
-  $bmp = [BadgeRender]::Render($inkW, $inkH, $padSide, $padTop, $padSide, $padBottom, $Count, $Kinds, $style)
+  $bmp = [BadgeRender]::Render($inkW, $inkH, $padSide, $padTop, $padSide, $padBottom, $Count, $Kinds, $ErrorMark, $style)
   [BadgeNative]::Present($script:Form, $bmp, $cx, $cy)
   # Keep the pixels: a z-order restore can then re-present the exact frame
   # without paying for the render (which re-measures the digit's ink).
@@ -1196,8 +1246,8 @@ function Read-Preview {
     if ([bool]$obj.enabled) {
       $kinds = @()
       foreach ($k in @($obj.dots)) { $kinds += [string]$k }
-      $script:PreviewCache = [pscustomobject]@{ Count = [int]$obj.count; Kinds = $kinds }
-      Write-Log "preview.json: $($kinds.Count) dot(s) [$($kinds -join ',')] count=$([int]$obj.count)"
+      $script:PreviewCache = [pscustomobject]@{ Count = [int]$obj.count; Kinds = $kinds; Error = [bool]$obj.error }
+      Write-Log "preview.json: $($kinds.Count) dot(s) [$($kinds -join ',')] count=$([int]$obj.count) error=$([bool]$obj.error)"
       $script:PreviewLogged = $true
     } elseif ($script:PreviewLogged) {
       Write-Log 'preview.json disabled - back to the live state'
@@ -1324,12 +1374,14 @@ function Invoke-Step {
 
     $count = 0
     $kinds = @()
+    $errorMark = $false
     $preview = Read-Preview
     if ($null -ne $preview) {
       # Tuning mode: preview.json pins a fixed set of marks on screen so the
       # position/size can be adjusted by hand without waiting for real events.
       $count = $preview.Count
       $kinds = @($preview.Kinds)
+      $errorMark = [bool]$preview.Error
     } elseif ($Demo) {
       $count = 3
       $kinds = @('question', 'approval', 'question')
@@ -1337,6 +1389,10 @@ function Invoke-Step {
       $st = Read-State
       if ($null -ne $st) {
         $count = [int](Get-ConfigValue $st 'completed.count' 0)
+        # A failed turn is shown as a red dot at the top-left corner, never as a
+        # number in the badge: there is no result to read, and folding it into
+        # the count would make the count mean two different things.
+        $errorMark = [int](Get-ConfigValue $st 'failed.count' 0) -gt 0
         $items = @(Get-ConfigValue $st 'pending.items' @())
         if ($items.Count -gt 0) {
           if ($cfg.DotGroup -eq 'kind') {
@@ -1373,8 +1429,8 @@ function Invoke-Step {
       }
     }
 
-    if (($count -le 0) -and ($kinds.Count -eq 0) -and $cfg.Style.HideWhenZero) { Hide-Overlay -Reason 'nothing to draw'; return }
-    Show-Frame -Config $cfg -Icon $drawRect -Count $count -Kinds $kinds
+    if (($count -le 0) -and ($kinds.Count -eq 0) -and (-not $errorMark) -and $cfg.Style.HideWhenZero) { Hide-Overlay -Reason 'nothing to draw'; return }
+    Show-Frame -Config $cfg -Icon $drawRect -Count $count -Kinds $kinds -ErrorMark $errorMark
     # Every tick, not every so often: the taskbar taking the foreground (a click
     # on its button) is enough to cover the overlay, and no state changes when
     # that happens, so there is no repaint to rescue it. This is what makes the
