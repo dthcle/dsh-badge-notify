@@ -1,6 +1,6 @@
 {
   "name": "dsh-badge-notify",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "ChatGPT-style notification overlay on the DSH taskbar button: a black/white badge whose centre sits on the icon's top-right corner with the number of UNREAD completed sessions (matching DSH's own green completion dot), plus a column of attention dots centred on the icon's left edge (black = question awaiting reply, yellow = permission request).",
   "type": "module",
   "main": "lib/index.js",
@@ -31,7 +31,7 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "test": "node test/child-session.test.mjs && node test/client-static.test.mjs"
+    "test": "node test/child-session.test.mjs && node test/client-static.test.mjs && node test/foreground-read.test.mjs"
   },
   "os": [
     "win32"
