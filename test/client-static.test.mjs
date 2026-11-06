@@ -50,7 +50,31 @@ const unusedClasses = [...definedClasses].filter((c) => !usedClasses.has(c));
 console.log("\nclasses used in JS not in CSS:", undefinedClasses.length ? undefinedClasses.join(", ") : "none");
 console.log("classes defined in CSS, unused:", unusedClasses.length ? unusedClasses.join(", ") : "none");
 
+// The plugin has no on/off switch of its own: enabling the bundle shows the
+// badge and disabling it removes the overlay. Guard that contract, because a
+// re-added switch would quietly give the user two conflicting controls.
+const panelStart = src.indexOf("function BadgeNotifyPanel");
+const panelEnd = src.indexOf("const DBN_CSS");
+const panel = src.slice(panelStart, panelEnd);
+const hasButton = /h\('button'|onClick:/.test(panel);
+const callsToggle = /api\('(start|stop)'\)/.test(src);
+console.log("\npanel renders a control:", hasButton ? "YES (should be informational only)" : "no");
+console.log("client calls start/stop  :", callsToggle ? "YES (should not exist)" : "no");
+
+// The panel must live on the plugin's own page, not in the crowded settings list.
+const registersPluginsPage = /slots\.inject\('plugins\.bundle\.config'/.test(src);
+const registersSettingsPage = /slots\.inject\('settings\.section'/.test(src);
+console.log("registers plugins page   :", registersPluginsPage ? "yes" : "NO (expected)");
+console.log("registers settings page  :", registersSettingsPage ? "YES (should be removed)" : "no");
+
 const ok =
-  !missingZh.length && !missingEn.length && !bad && !undefinedClasses.length;
+  !missingZh.length &&
+  !missingEn.length &&
+  !bad &&
+  !undefinedClasses.length &&
+  !hasButton &&
+  !callsToggle &&
+  registersPluginsPage &&
+  !registersSettingsPage;
 console.log(`\n=== ${ok ? "PASS" : "FAIL"} ===`);
 process.exit(ok ? 0 : 1);

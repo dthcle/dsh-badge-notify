@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.9.0]
+
+### Changed
+- **设置页移除，说明搬到插件自己的页面**。原来在「设置」里占一个独立条目
+  （`settings.section`，id `badge-notify`），设置列表本来就挤，而这个插件其实没什么可配置的。
+  现在注册到 **`plugins.bundle.config`**（key = 包名），也就是「设置 → 插件 → 任务徽标」
+  这个插件页里，作为一段只读说明。
+- **去掉启动/停止开关**。浮层的生死现在完全由插件本身决定：
+  - **启用插件 → 自动显示**（`apply()` 里部署并拉起浮层）
+  - **禁用插件 → 自动消失**（`ctx.effect` 的清理函数里 `stop()` 杀掉浮层）
+  不再有第二种控制方式，也就不会出现「开关说开着、其实没跑」这种不同步。
+- 移除 `POST /api/dsh-badge-notify/start` 与 `/stop` 路由（保留 `status` / `clear` / `read`）。
+  旧版本留下的 `stopped.flag` 会在启动时清除——否则从「按过停止」的旧版升级上来，
+  徽标会永远不出现，而界面上已经没有按钮可以救回来。
+- 插件页的面板改成纯说明：状态点 + 四种标记的图解 + 行为说明 + 数据目录路径，无任何按钮。
+  同时支持 `view: 'summary'`（折叠时只显示一行）。
+
+### Verified
+- 实测「禁用即消失」：关闭插件后日志出现 `stop: unloaded, overlay left=0`，
+  `Get-CimInstance` 查不到任何 `BadgeNotify.ps1` 进程；重新启用后浮层自动回来。
+- 槽位核对（`cordis_inspect_query`）：`settings.section` 的 occupants 里已无 `badge-notify`；
+  `plugins.bundle.config` 的 occupants 里出现 `tk / dsh-badge-notify`。
+- `test/client-static.test.mjs` 新增四条契约断言：面板不得渲染 button/onClick、
+  客户端不得调用 start/stop、必须注册在 `plugins.bundle.config`、不得再注册 `settings.section`。
+
 ## [0.8.1]
 
 ### Changed
