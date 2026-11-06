@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "任务状态徽标（dsh-badge-notify）",
+    "description": "在 Windows 任务栏的 DSH 图标上叠画未读完成数与待处理提示点；启用即显示，禁用即消失。"
+  }
+}

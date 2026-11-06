@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Task Status Badge (dsh-badge-notify)",
+    "description": "Paints the unread completion count and attention dots on the DSH taskbar button. Shown while the plugin is enabled, gone when it is disabled."
+  }
+}

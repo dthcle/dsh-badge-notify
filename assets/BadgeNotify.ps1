@@ -34,7 +34,7 @@ param(
   [switch]$Demo
 )
 
-$script:Version = '0.9.0'
+$script:Version = '0.9.1'
 $ErrorActionPreference = 'Stop'
 
 if ($PSScriptRoot) { $script:Dir = $PSScriptRoot } else { $script:Dir = (Get-Location).Path }

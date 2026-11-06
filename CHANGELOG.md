@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.9.1]
+
+### Changed
+- **插件列表里的名字改成「任务状态徽标（dsh-badge-notify）」**（英文 `Task Status Badge (dsh-badge-notify)`）。
+  插件列表和插件详情页顶部显示的是同一处标题。
+
+  这里踩了个坑，记一下机制：DSH 的 `readPluginMeta`（`@deepseek-ai/dsh-app-boot`）取标题的顺序是
+  **`locale/en.json` 的 `meta.title` → 回退到 `package.json` 的 `name`**。
+  我们之前没有 `locale/` 目录，所以列表里一直显示裸包名 `dsh-badge-notify`；
+  而面板内部那个「任务徽标」只是插件自己的文案，跟列表标题无关。
+
+  现在新增 `locale/zh.json` 与 `locale/en.json`（`meta.title` + `meta.description`），
+  并把 `locale` 加进 `package.json` 的 `files`——否则 npm 安装后标题会退回包名。
+
+### Added
+- `test/display-meta.test.mjs`：9 项断言，锁住「locale 文件存在且可解析」「中文标题是
+  `任务状态徽标（dsh-badge-notify）`」「用的是全角括号 U+FF08/U+FF09」「`files` 含 `locale`」
+  「标题不等于裸包名（等于就说明回退了）」。最后一条正是这次 bug 的形态。
+
 ## [0.9.0]
 
 ### Changed
