@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.9.2]
+
+### Fixed
+- **0.9.1 的改名没生效，插件列表仍显示裸包名**。加了 `locale/*.json` 还不够。
+
+  真正的根因是 **`package.json` 的 `exports` 没放行 locale 子路径**。
+  DSH 取标题走的是包自身的模块解析：
+
+  ```
+  optionalResourcePath(`${specifier}/locale/en.json`, parentURL)
+  ```
+
+  而 **一旦声明了 `exports`，Node 就拒绝所有未列出的子路径**——`dsh-badge-notify/locale/en.json`
+  直接抛 `ERR_PACKAGE_PATH_NOT_EXPORTED`，字典为空，标题静默回退到 `package.json` 的 `name`。
+
+  对比 `dsh-header-modify`（列表里正常显示「标题栏按钮」）才发现差异，它的 `exports` 里有：
+
+  ```json
+  "./locale/*.json": "./locale/*.json"
+  ```
+
+  现在补上同一条。实测解析：
+
+  ```
+  OK  dsh-badge-notify/locale/en.json -> ...\locale\en.json
+  OK  dsh-badge-notify/locale/zh.json -> ...\locale\zh.json
+  ```
+
+### Added
+- `test/display-meta.test.mjs` 增加两条断言：`exports` 必须声明 `./locale/*.json`，
+  并且用 `createRequire().resolve('dsh-badge-notify/locale/en.json')` **实际解析一次**。
+  去掉那条 exports 再跑，测试会准确失败 2 项——正是这次 bug 的形态。
+
 ## [0.9.1]
 
 ### Changed

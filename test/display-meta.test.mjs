@@ -54,7 +54,34 @@ const pkg = readJson(path.join(root, "package.json"));
 const files = Array.isArray(pkg?.files) ? pkg.files : [];
 check("package.json files[] includes locale", files.includes("locale"), files.join(", "));
 
-console.log("\n4) the title differs from the package name");
+console.log("\n4) exports must expose ./locale/*.json");
+// THIS is what actually broke the title. readPluginMeta resolves the dictionary
+// through the package's own module resolution:
+//     optionalResourcePath(`${specifier}/locale/en.json`, parentURL)
+// and once `exports` exists, Node refuses every subpath it does not list - so
+// the lookup threw, `dictionaries` stayed empty and the title silently fell back
+// to the package name. dsh-header-modify works because it declares this subpath.
+const exportsField = pkg?.exports ?? {};
+const localeExport = Object.keys(exportsField).find((k) => k.startsWith("./locale/"));
+check("exports declares a ./locale/*.json subpath", localeExport !== undefined, Object.keys(exportsField).join(", "));
+
+// Prove it by resolving exactly the way the Host does.
+const { createRequire } = await import("node:module");
+const req = createRequire(path.join(root, "lib/index.js"));
+let enResolves = false;
+try {
+  req.resolve("dsh-badge-notify/locale/en.json");
+  enResolves = true;
+} catch {
+  enResolves = false;
+}
+check(
+  "dsh-badge-notify/locale/en.json is resolvable through exports",
+  enResolves,
+  "Node refused the subpath - readPluginMeta would fall back to the package name",
+);
+
+console.log("\n5) the title differs from the package name");
 // If they were equal, readPluginMeta would be falling back - the exact failure
 // mode this test exists to catch.
 check(
